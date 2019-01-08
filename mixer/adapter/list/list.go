@@ -39,6 +39,7 @@ import (
 	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/pkg/status"
 	"istio.io/istio/mixer/template/listentry"
+	"istio.io/istio/mixer/template/listipentry"
 )
 
 type (
@@ -80,6 +81,43 @@ func (h *handler) HandleListEntry(_ context.Context, entry *listentry.Instance) 
 	}
 
 	found, err := l.checkList(entry.Value)
+	code := rpc.OK
+	msg := ""
+
+	if err != nil {
+		code = rpc.INVALID_ARGUMENT
+		msg = err.Error()
+	} else if h.config.Blacklist {
+		if found {
+			code = rpc.PERMISSION_DENIED
+			msg = fmt.Sprintf("%s is blacklisted", entry.Value)
+		}
+	} else if !found {
+		code = rpc.NOT_FOUND
+		msg = fmt.Sprintf("%s is not whitelisted", entry.Value)
+	}
+
+	return adapter.CheckResult{
+		Status:        status.WithMessage(code, msg),
+		ValidDuration: h.config.CachingInterval,
+		ValidUseCount: h.config.CachingUseCount,
+	}, nil
+}
+
+func (h *handler) HandleListIpEntry(_ context.Context, entry *listipentry.Instance) (adapter.CheckResult, error) {
+	h.lock.Lock()
+	l := h.list
+	err := h.lastFetchError
+	h.lock.Unlock()
+
+	if l == nil {
+		// no valid list
+		return adapter.CheckResult{}, err
+	}
+
+	stringValue := entry.Value.String()
+
+	found, err := l.checkList(stringValue)
 	code := rpc.OK
 	msg := ""
 
@@ -262,7 +300,7 @@ func GetInfo() adapter.Info {
 		Name:               "listchecker",
 		Impl:               "istio.io/istio/mixer/adapter/list",
 		Description:        "Checks whether an entry is present in a list",
-		SupportedTemplates: []string{listentry.TemplateName},
+		SupportedTemplates: []string{listentry.TemplateName, listipentry.TemplateName},
 		DefaultConfig: &config.Params{
 			RefreshInterval: 60 * time.Second,
 			Ttl:             300 * time.Second,
@@ -280,8 +318,9 @@ type builder struct {
 	adapterConfig *config.Params
 }
 
-func (*builder) SetListEntryTypes(map[string]*listentry.Type) {}
-func (b *builder) SetAdapterConfig(cfg adapter.Config)        { b.adapterConfig = cfg.(*config.Params) }
+func (*builder) SetListEntryTypes(map[string]*listentry.Type)     {}
+func (*builder) SetListIpEntryTypes(map[string]*listipentry.Type) {}
+func (b *builder) SetAdapterConfig(cfg adapter.Config)            { b.adapterConfig = cfg.(*config.Params) }
 
 func (b *builder) Validate() (ce *adapter.ConfigErrors) {
 	ac := b.adapterConfig

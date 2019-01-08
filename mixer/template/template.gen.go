@@ -47,6 +47,8 @@ import (
 
 	"istio.io/istio/mixer/template/listentry"
 
+	"istio.io/istio/mixer/template/listipentry"
+
 	"istio.io/istio/mixer/template/logentry"
 
 	"istio.io/istio/mixer/template/metric"
@@ -1521,6 +1523,115 @@ var (
 
 				// Instantiate a new builder for the instance.
 				builder, errp := newBuilder_listentry_Template(expb, param.(*listentry.InstanceParam))
+				if !errp.IsNil() {
+					return nil, errp.AsCompilationError(instanceName)
+				}
+
+				return func(attr attribute.Bag) (interface{}, error) {
+					// Use the instantiated builder (that this fn closes over) to construct an instance.
+					e, errp := builder.build(attr)
+					if !errp.IsNil() {
+						err := errp.AsEvaluationError(instanceName)
+						log.Error(err.Error())
+						return nil, err
+					}
+
+					e.Name = instanceName
+					return e, nil
+				}, nil
+			},
+		},
+
+		listipentry.TemplateName: {
+			Name:               listipentry.TemplateName,
+			Impl:               "listipentry",
+			CtrCfg:             &listipentry.InstanceParam{},
+			Variety:            istio_adapter_model_v1beta1.TEMPLATE_VARIETY_CHECK,
+			BldrInterfaceName:  listipentry.TemplateName + "." + "HandlerBuilder",
+			HndlrInterfaceName: listipentry.TemplateName + "." + "Handler",
+			BuilderSupportsTemplate: func(hndlrBuilder adapter.HandlerBuilder) bool {
+				_, ok := hndlrBuilder.(listipentry.HandlerBuilder)
+				return ok
+			},
+			HandlerSupportsTemplate: func(hndlr adapter.Handler) bool {
+				_, ok := hndlr.(listipentry.Handler)
+				return ok
+			},
+			InferType: func(cp proto.Message, tEvalFn template.TypeEvalFn) (proto.Message, error) {
+
+				var BuildTemplate func(param *listipentry.InstanceParam,
+					path string) (*listipentry.Type, error)
+
+				_ = BuildTemplate
+
+				BuildTemplate = func(param *listipentry.InstanceParam,
+					path string) (*listipentry.Type, error) {
+
+					if param == nil {
+						return nil, nil
+					}
+
+					infrdType := &listipentry.Type{}
+
+					var err error = nil
+
+					if param.Value != "" {
+						if t, e := tEvalFn(param.Value); e != nil || t != istio_policy_v1beta1.IP_ADDRESS {
+							if e != nil {
+								return nil, fmt.Errorf("failed to evaluate expression for field '%s': %v", path+"Value", e)
+							}
+							return nil, fmt.Errorf("error type checking for field '%s': Evaluated expression type %v want %v", path+"Value", t, istio_policy_v1beta1.IP_ADDRESS)
+						}
+					}
+
+					return infrdType, err
+
+				}
+
+				instParam := cp.(*listipentry.InstanceParam)
+
+				return BuildTemplate(instParam, "")
+			},
+
+			SetType: func(types map[string]proto.Message, builder adapter.HandlerBuilder) {
+				// Mixer framework should have ensured the type safety.
+				castedBuilder := builder.(listipentry.HandlerBuilder)
+				castedTypes := make(map[string]*listipentry.Type, len(types))
+				for k, v := range types {
+					// Mixer framework should have ensured the type safety.
+					v1 := v.(*listipentry.Type)
+					castedTypes[k] = v1
+				}
+				castedBuilder.SetListIpEntryTypes(castedTypes)
+			},
+
+			// DispatchCheck dispatches the instance to the handler.
+			DispatchCheck: func(ctx context.Context, handler adapter.Handler, inst interface{}, out *attribute.MutableBag, outPrefix string) (adapter.CheckResult, error) {
+
+				// Convert the instance from the generic interface{}, to its specialized type.
+				instance := inst.(*listipentry.Instance)
+
+				// Invoke the handler.
+				return handler.(listipentry.Handler).HandleListIpEntry(ctx, instance)
+			},
+
+			// CreateInstanceBuilder creates a new template.InstanceBuilderFN based on the supplied instance parameters. It uses
+			// the expression builder to create a new instance of a builder struct for the instance type. Created
+			// InstanceBuilderFn closes over this struct. When InstanceBuilderFn is called it, in turn, calls into
+			// the builder with an attribute bag.
+			//
+			// See template.CreateInstanceBuilderFn for more details.
+			CreateInstanceBuilder: func(instanceName string, param proto.Message, expb *compiled.ExpressionBuilder) (template.InstanceBuilderFn, error) {
+
+				// If the parameter is nil. Simply return nil. The builder, then, will also return nil.
+				if param == nil {
+					return func(attr attribute.Bag) (interface{}, error) {
+						return nil, nil
+					}, nil
+				}
+
+				// Instantiate a new builder for the instance.
+				builder, errp := newBuilder_listipentry_Template(expb, param.(*listipentry.InstanceParam))
 				if !errp.IsNil() {
 					return nil, errp.AsCompilationError(instanceName)
 				}
@@ -3987,6 +4098,86 @@ func (b *builder_listentry_Template) build(
 			return nil, template.NewErrorPath("Value", err)
 		}
 		r.Value = vString
+
+	}
+
+	return r, template.ErrorPath{}
+}
+
+// builder struct for constructing an instance of Template.
+type builder_listipentry_Template struct {
+
+	// builder for field value: net.IP.
+
+	bldValue compiled.Expression
+} // builder_listipentry_Template
+
+// Instantiates and returns a new builder for Template, based on the provided instance parameter.
+func newBuilder_listipentry_Template(
+	expb *compiled.ExpressionBuilder,
+	param *listipentry.InstanceParam) (*builder_listipentry_Template, template.ErrorPath) {
+
+	// If the parameter is nil. Simply return nil. The builder, then, will also return nil.
+	if param == nil {
+		return nil, template.ErrorPath{}
+	}
+
+	b := &builder_listipentry_Template{}
+
+	var exp compiled.Expression
+	_ = exp
+	var err error
+	_ = err
+	var errp template.ErrorPath
+	_ = errp
+	var expType istio_policy_v1beta1.ValueType
+	_ = expType
+
+	if param.Value == "" {
+		b.bldValue = nil
+	} else {
+		b.bldValue, expType, err = expb.Compile(param.Value)
+		if err != nil {
+			return nil, template.NewErrorPath("Value", err)
+		}
+
+	}
+
+	return b, template.ErrorPath{}
+}
+
+// build and return the instance, given a set of attributes.
+func (b *builder_listipentry_Template) build(
+	attrs attribute.Bag) (*listipentry.Instance, template.ErrorPath) {
+
+	if b == nil {
+		return nil, template.ErrorPath{}
+	}
+
+	var err error
+	_ = err
+	var errp template.ErrorPath
+	_ = errp
+	var vBool bool
+	_ = vBool
+	var vInt int64
+	_ = vInt
+	var vString string
+	_ = vString
+	var vDouble float64
+	_ = vDouble
+	var vIface interface{}
+	_ = vIface
+
+	r := &listipentry.Instance{}
+
+	if b.bldValue != nil {
+
+		if vIface, err = b.bldValue.Evaluate(attrs); err != nil {
+			return nil, template.NewErrorPath("Value", err)
+		}
+
+		r.Value = vIface.(net.IP)
 
 	}
 

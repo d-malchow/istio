@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -32,12 +33,14 @@ import (
 	"istio.io/istio/mixer/pkg/adapter"
 	"istio.io/istio/mixer/pkg/adapter/test"
 	"istio.io/istio/mixer/template/listentry"
+	"istio.io/istio/mixer/template/listipentry"
 )
 
 func TestBasic(t *testing.T) {
 	info := GetInfo()
 
-	if !containsListEntryTemplate(info.SupportedTemplates) {
+	//Currently expected ListEntry and ListIpEntry
+	if !containsAllTemplates(info.SupportedTemplates) {
 		t.Error("Didn't find all expected supported templates")
 	}
 
@@ -45,6 +48,7 @@ func TestBasic(t *testing.T) {
 	b := info.NewBuilder().(*builder)
 	b.SetAdapterConfig(cfg)
 	b.SetListEntryTypes(nil)
+	b.SetListIpEntryTypes(nil)
 
 	if err := b.Validate(); err != nil {
 		t.Errorf("Got error %v, expecting success", err)
@@ -61,8 +65,14 @@ func TestBasic(t *testing.T) {
 }
 
 // A test case for the list checker.
-type listTestCase struct {
+type listentryTestCase struct {
 	addr   string
+	result rpc.Code
+	fail   bool
+}
+
+type listipentryTestCase struct {
+	addr   net.IP
 	result rpc.Code
 	fail   bool
 }
@@ -80,10 +90,28 @@ func buildHandler(t *testing.T, cfg adapter.Config) (*handler, error) {
 }
 
 // Checks that the given test cases are executed as expected by the handler.
-func checkCases(t *testing.T, cases []listTestCase, h *handler) {
+func checkCasesListEntry(t *testing.T, cases []listentryTestCase, h *handler) {
 	for _, c := range cases {
-		t.Run(c.addr, func(t *testing.T) {
+		t.Run("ListEntry: "+c.addr, func(t *testing.T) {
 			result, err := h.HandleListEntry(context.Background(), &listentry.Instance{Value: c.addr})
+			if (err != nil) != c.fail {
+				t.Errorf("Did not expect err '%v'", err)
+			}
+
+			if err != nil {
+				if result.Status.Code != int32(c.result) {
+					t.Errorf("Got '%v', expecting '%v'", result.Status.Code, c.result)
+				}
+			}
+		})
+	}
+}
+
+// Checks that the given test cases are executed as expected by the handler.
+func checkCasesListIpEntry(t *testing.T, cases []listipentryTestCase, h *handler) {
+	for _, c := range cases {
+		t.Run("ListIpEntry: "+c.addr.String(), func(t *testing.T) {
+			result, err := h.HandleListIpEntry(context.Background(), &listipentry.Instance{Value: c.addr})
 			if (err != nil) != c.fail {
 				t.Errorf("Did not expect err '%v'", err)
 			}
@@ -106,13 +134,22 @@ func setupServer(t *testing.T, data string) *httptest.Server {
 	}))
 }
 
-func containsListEntryTemplate(s []string) bool {
+func containsAllTemplates(s []string) bool {
+	var containsListEntry bool
+	var containsListIpEntry bool
+
 	for _, a := range s {
 		if a == listentry.TemplateName {
-			return true
+			containsListEntry = true
+		} else if a == listipentry.TemplateName {
+			containsListIpEntry = true
 		}
 	}
-	return false
+	if containsListEntry && containsListIpEntry {
+		return true
+	} else {
+		return false
+	}
 }
 
 func TestIPList(t *testing.T) {
@@ -143,7 +180,7 @@ func TestIPList(t *testing.T) {
 		t.Fatalf("Got error %v, expecting success", err)
 	}
 
-	cases := []listTestCase{
+	listEntryCases := []listentryTestCase{
 		{"10.10.11.2", rpc.OK, false},
 		{"9.9.9.1", rpc.OK, false},
 		{"120.10.11.2", rpc.NOT_FOUND, false},
@@ -159,7 +196,19 @@ func TestIPList(t *testing.T) {
 	// exercise the NOP code
 	h.fetchList()
 
-	checkCases(t, cases, h)
+	//Check cases with listentry template type
+	checkCasesListEntry(t, listEntryCases, h)
+
+	//Check cases with listipentry template type
+
+	listIpEntryCases := []listipentryTestCase{
+		{net.ParseIP("10.10.11.2"), rpc.OK, false},
+		{net.ParseIP("9.9.9.1"), rpc.OK, false},
+		{net.ParseIP("120.10.11.2"), rpc.NOT_FOUND, false},
+		{net.ParseIP("11.11.11.11"), rpc.OK, false},
+	}
+
+	checkCasesListIpEntry(t, listIpEntryCases, h)
 
 	// now try to parse a list with errors
 	entryCnt := h.list.numEntries()
@@ -207,7 +256,7 @@ func TestStringList(t *testing.T) {
 		t.Fatalf("Got error %v, expecting success", err)
 	}
 
-	cases := []listTestCase{
+	cases := []listentryTestCase{
 		{"ABC", rpc.OK, false},
 		{"DEF", rpc.OK, false},
 		{"GHI", rpc.NOT_FOUND, false},
@@ -217,7 +266,7 @@ func TestStringList(t *testing.T) {
 		{"override", rpc.NOT_FOUND, false},
 	}
 
-	checkCases(t, cases, h)
+	checkCasesListEntry(t, cases, h)
 }
 
 func TestBlackStringList(t *testing.T) {
@@ -238,7 +287,7 @@ func TestBlackStringList(t *testing.T) {
 		t.Fatalf("Got error %v, expecting success", err)
 	}
 
-	cases := []listTestCase{
+	cases := []listentryTestCase{
 		{"ABC", rpc.PERMISSION_DENIED, false},
 		{"DEF", rpc.PERMISSION_DENIED, false},
 		{"GHI", rpc.OK, false},
@@ -248,7 +297,7 @@ func TestBlackStringList(t *testing.T) {
 		{"override", rpc.OK, false},
 	}
 
-	checkCases(t, cases, h)
+	checkCasesListEntry(t, cases, h)
 }
 
 func TestCaseInsensitiveStringList(t *testing.T) {
@@ -267,7 +316,7 @@ func TestCaseInsensitiveStringList(t *testing.T) {
 		t.Fatalf("Got error %v, expecting success", err)
 	}
 
-	cases := []listTestCase{
+	cases := []listentryTestCase{
 		{"ABC", rpc.OK, false},
 		{"DEF", rpc.OK, false},
 		{"GHI", rpc.NOT_FOUND, false},
@@ -277,7 +326,7 @@ func TestCaseInsensitiveStringList(t *testing.T) {
 		{"override", rpc.OK, false},
 	}
 
-	checkCases(t, cases, h)
+	checkCasesListEntry(t, cases, h)
 }
 
 func TestNoUrlStringList(t *testing.T) {
@@ -290,14 +339,14 @@ func TestNoUrlStringList(t *testing.T) {
 		t.Fatalf("Got error %v, expecting success", err)
 	}
 
-	cases := []listTestCase{
+	cases := []listentryTestCase{
 		{"ABC", rpc.NOT_FOUND, false},
 		{"OVERRIDE", rpc.OK, false},
 		{"abc", rpc.NOT_FOUND, false},
 		{"override", rpc.NOT_FOUND, false},
 	}
 
-	checkCases(t, cases, h)
+	checkCasesListEntry(t, cases, h)
 }
 
 func TestRegexList(t *testing.T) {
@@ -328,7 +377,7 @@ func TestRegexList(t *testing.T) {
 		t.Fatalf("Got error %v, expecting success", err)
 	}
 
-	cases := []listTestCase{
+	cases := []listentryTestCase{
 		{"abc", rpc.OK, false},
 		{"B", rpc.NOT_FOUND, false},
 	}
@@ -341,7 +390,7 @@ func TestRegexList(t *testing.T) {
 	// exercise the NOP code
 	h.fetchList()
 
-	checkCases(t, cases, h)
+	checkCasesListEntry(t, cases, h)
 
 	// now try to parse a list with errors
 	entryCnt := h.list.numEntries()
